@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import logging
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 
@@ -68,28 +66,17 @@ class STTEngine:
         self._ensure_model()
         if audio.size == 0:
             return TranscriptionResult(text="", language=self.language)
-        sr = sample_rate or config.SAMPLE_RATE_INPUT
-        tmp_path: Path | None = None
-        try:
-            import soundfile as sf
-
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                tmp_path = Path(f.name)
-            sf.write(str(tmp_path), audio.astype(np.float32), sr)
-            segments, info = self._model.transcribe(
-                str(tmp_path),
-                language=self.language,
-                beam_size=5,
-                vad_filter=True,
-                initial_prompt=self.initial_prompt,
-            )
-            text = " ".join(seg.text.strip() for seg in segments).strip()
-            lang = getattr(info, "language", None) or self.language
-            log.info("STT (%s): %s", lang, text)
-            return TranscriptionResult(text=text, language=lang)
-        finally:
-            if tmp_path is not None:
-                try:
-                    tmp_path.unlink()
-                except Exception:
-                    pass
+        segments, info = self._model.transcribe(
+            np.asarray(audio, dtype=np.float32),
+            language=self.language,
+            beam_size=config.WHISPER_BEAM_SIZE,
+            best_of=config.WHISPER_BEST_OF,
+            vad_filter=config.WHISPER_VAD_FILTER,
+            condition_on_previous_text=False,
+            without_timestamps=True,
+            initial_prompt=self.initial_prompt,
+        )
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        lang = getattr(info, "language", None) or self.language
+        log.info("STT (%s): %s", lang, text)
+        return TranscriptionResult(text=text, language=lang)

@@ -7,12 +7,12 @@ import queue
 import threading
 import tkinter as tk
 from collections import deque
-from typing import Callable
+from typing import Any, Callable
 
 import customtkinter as ctk
 import numpy as np
 import sounddevice as sd
-from PIL import Image
+from PIL import Image, ImageDraw, ImageTk
 
 from . import config
 
@@ -61,16 +61,24 @@ class ANEAGui:
         self.root = ctk.CTk()
         self.root.title(config.GUI_TITLE)
         self.root.geometry("520x720")
-        self.root.minsize(440, 620)
-        self.root.configure(fg_color="#f4f4f2")
+        self.root.resizable(False, False)
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.withdraw()
+        self.root.configure(fg_color="#252525")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self._emotion_images: dict[str, ctk.CTkImage] = {}
+        self._emotion_images: dict[str, ImageTk.PhotoImage] = {}
         self._current_emotion = "neutral"
         self._waveform_data: deque[float] = deque(maxlen=config.SAMPLE_RATE_INPUT)
         self._speaking_timer: str | None = None
+        self._speaking_levels = np.zeros(1, dtype=np.float32)
+        self._speaking_frame = 0
         self._error_after_id: str | None = None
         self._waveform_after_id: str | None = None
+        self._panel_animation_id: str | None = None
+        self._tray_icon: Any = None
+        self._panel_visible = False
         self._command_queue: "queue.Queue[Callable[[], None]]" = queue.Queue()
         self._shutdown = threading.Event()
         self._ready = False
@@ -85,6 +93,8 @@ class ANEAGui:
         self._set_emotion("neutral")
         self._poll_queue()
         self._refresh_devices()
+        self._start_tray_icon()
+        self.root.after(120, self.show_panel)
 
     @property
     def is_shutting_down(self) -> bool:
@@ -96,79 +106,105 @@ class ANEAGui:
 
     def _build_layout(self) -> None:
         self._main_frame = ctk.CTkFrame(
-            self.root, corner_radius=28, fg_color="#292929", border_width=0
+            self.root, corner_radius=12, fg_color="#252525", border_width=1,
+            border_color="#3d3d3d"
         )
-        self._main_frame.pack(fill="both", expand=True, padx=24, pady=16)
+        self._main_frame.pack(fill="both", expand=True, padx=26, pady=18)
 
-        top_bar = ctk.CTkFrame(self._main_frame, fg_color="transparent", height=38)
-        top_bar.pack(fill="x", padx=22, pady=(12, 0))
+        top_bar = ctk.CTkFrame(self._main_frame, fg_color="transparent", height=44)
+        top_bar.pack(fill="x", padx=24, pady=(14, 0))
         top_bar.pack_propagate(False)
+        brand = ctk.CTkFrame(top_bar, fg_color="transparent")
+        brand.pack(side="left", anchor="center")
         ctk.CTkLabel(
-            top_bar, text="ANEA", text_color="#f6f1ea", font=("Segoe UI", 16, "bold")
-        ).pack(side="left")
+            brand, text="ANEA", text_color="#f5f2ed", font=("Segoe UI", 18, "bold")
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            brand, text="ASISTENTE DE VOZ", text_color="#777977",
+            font=("Segoe UI", 8, "bold")
+        ).pack(anchor="w", pady=(1, 0))
         self.close_btn = ctk.CTkButton(
-            top_bar, text="×", width=32, height=32, corner_radius=16,
-            fg_color="transparent", hover_color="#493033", text_color="#b7474c",
+            top_bar, text="×", width=32, height=32, corner_radius=8,
+            fg_color="transparent", hover_color="#493033", text_color="#c4555b",
             font=("Segoe UI", 27), command=self._on_close,
         )
         self.close_btn.pack(side="right")
 
-        self.avatar_frame = ctk.CTkFrame(
-            self._main_frame, width=274, height=274, corner_radius=137,
-            fg_color="#86b943", border_width=0,
+        avatar_stage = ctk.CTkFrame(
+            self._main_frame, width=292, height=292, corner_radius=0,
+            fg_color="transparent", border_width=0,
         )
-        self.avatar_frame.pack(pady=(16, 12))
-        self.avatar_frame.pack_propagate(False)
-        self.face_label = ctk.CTkLabel(
-            self.avatar_frame, text="", fg_color="#3a4a86", corner_radius=124
+        avatar_stage.pack(pady=(6, 8))
+        avatar_stage.pack_propagate(False)
+        self.soundwave_canvas = tk.Canvas(
+            avatar_stage, width=292, height=292, bg="#252525", highlightthickness=0
         )
-        self.face_label.pack(fill="both", expand=True, padx=8, pady=8)
+        self.soundwave_canvas.place(x=0, y=0)
+        self.avatar_canvas = tk.Canvas(
+            avatar_stage, width=244, height=244, bg="#252525", highlightthickness=0
+        )
+        self.avatar_canvas.place(relx=0.5, rely=0.5, anchor="center")
+        self.soundwave_canvas.place_forget()
 
         self.status_label = ctk.CTkLabel(
-            self._main_frame, text="Inicializando...", font=("Segoe UI", 12),
-            text_color="#a9aaa8",
+            self._main_frame, text="Inicializando...", font=("Segoe UI", 11, "bold"),
+            text_color="#b7bab6", height=24,
         )
-        self.status_label.pack(pady=(0, 4))
+        self.status_label.pack(pady=(0, 6))
 
         self.waveform = ctk.CTkCanvas(
-            self._main_frame, height=54, bg="#292929", highlightthickness=0
+            self._main_frame, height=48, bg="#252525", highlightthickness=0
         )
-        self.waveform.pack(fill="x", padx=32, pady=(8, 10))
+        self.waveform.pack(fill="x", padx=28, pady=(4, 12))
 
         self.heard_label = ctk.CTkLabel(
-            self._main_frame, text="", font=("Consolas", 12),
-            text_color="#f5f2ed", fg_color="#505050", corner_radius=14,
-            wraplength=config.GUI_WIDTH - 110, justify="center", height=54,
+            self._main_frame, text="Habla con ANEA...", font=("Consolas", 12),
+            text_color="#f5f2ed", fg_color="#464646", corner_radius=10,
+            wraplength=config.GUI_WIDTH - 120, justify="center", height=54,
         )
-        self.heard_label.pack(pady=(0, 10), padx=34, fill="x")
+        self.heard_label.pack(pady=(0, 12), padx=28, fill="x")
         self._heard_clear_after: str | None = None
 
-        button_row = ctk.CTkFrame(self._main_frame, fg_color="transparent")
-        button_row.pack(fill="x", padx=34, pady=(0, 10))
+        selectors_row = ctk.CTkFrame(self._main_frame, fg_color="transparent")
+        selectors_row.pack(fill="x", padx=28, pady=(0, 8))
+        device_column = ctk.CTkFrame(selectors_row, fg_color="transparent")
+        device_column.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkLabel(
+            device_column, text="MICRÓFONO", text_color="#777977",
+            font=("Segoe UI", 8, "bold"), anchor="w"
+        ).pack(fill="x", pady=(0, 3))
+
+        voice_column = ctk.CTkFrame(selectors_row, fg_color="transparent", width=138)
+        voice_column.pack(side="right", fill="y")
+        ctk.CTkLabel(
+            voice_column, text="VOZ", text_color="#777977",
+            font=("Segoe UI", 8, "bold"), anchor="w"
+        ).pack(fill="x", pady=(0, 3))
+
         self.manual_btn = ctk.CTkButton(
-            button_row, text="▶", width=48, height=48, corner_radius=14,
-            fg_color="#555555", hover_color="#686868", font=("Segoe UI", 19),
+            self._main_frame, text="▶  INICIAR", width=132, height=46, corner_radius=8,
+            fg_color="#5b5b5b", hover_color="#707070", font=("Segoe UI", 19),
             command=self._on_manual_click, state="disabled",
         )
-        self.manual_btn.pack(side="right", padx=(10, 0))
 
         self.device_var = tk.StringVar(value="(default)")
         self.device_menu = ctk.CTkOptionMenu(
-            button_row, variable=self.device_var, values=["(default)"],
-            command=self._on_device_selected, width=150, height=32,
-            corner_radius=16, fg_color="#505050", button_color="#505050",
-            button_hover_color="#646464",
+            device_column, variable=self.device_var, values=["(default)"],
+            command=self._on_device_selected, width=220, height=32,
+            corner_radius=8, fg_color="#454545", button_color="#454545",
+            button_hover_color="#5b5b5b", text_color="#ece9e4",
         )
-        self.device_menu.pack(side="left", padx=(0, 8))
+        self.device_menu.pack(fill="x")
 
         self.voice_var = tk.StringVar(value="anea")
         self.voice_menu = ctk.CTkOptionMenu(
-            button_row, variable=self.voice_var, values=["anea", "miku"],
-            command=self._on_voice_selected, width=112, height=32,
-            corner_radius=16, fg_color="#505050", button_color="#505050",
-            button_hover_color="#646464",
+            voice_column, variable=self.voice_var, values=["anea", "miku"],
+            command=self._on_voice_selected, width=138, height=32,
+            corner_radius=8, fg_color="#454545", button_color="#454545",
+            button_hover_color="#5b5b5b", text_color="#ece9e4",
         )
-        self.voice_menu.pack(side="left")
+        self.voice_menu.pack(fill="x")
+        self.manual_btn.pack(anchor="e", padx=28, pady=(0, 10))
 
         self._waveform_after_id = self.root.after(50, self._tick_waveform)
 
@@ -194,23 +230,30 @@ class ANEAGui:
         self._loading_steps.pack()
 
     def _preload_emotions(self) -> None:
-        size = (config.EMOTION_SIZE, config.EMOTION_SIZE)
+        size = (238, 238)
         for key in self.EMOTION_KEYS:
             path = config.EMOTIONS[key]
             if not path.exists():
                 log.warning("Falta emoción %s: %s", key, path)
                 continue
-            img = Image.open(path).convert("RGBA")
-            self._emotion_images[key] = ctk.CTkImage(light_image=img, dark_image=img, size=size)
+            img = Image.open(path).convert("RGBA").resize(size, Image.Resampling.LANCZOS)
+            mask = Image.new("L", size, 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, size[0] - 1, size[1] - 1), fill=255)
+            circular = Image.new("RGBA", size, "#252525")
+            circular.paste(img, (0, 0), mask)
+            self._emotion_images[key] = ImageTk.PhotoImage(circular)
 
     def _set_emotion(self, key: str) -> None:
         if key not in self._emotion_images:
             return
         self._current_emotion = key
-        self.face_label.configure(image=self._emotion_images[key])
-        self.avatar_frame.configure(
-            fg_color="#86b943" if key == "speaking" else "#292929"
+        self.avatar_canvas.delete("all")
+        self.avatar_canvas.create_oval(
+            1, 1, 243, 243, fill="#303d75", outline="#303d75"
         )
+        self.avatar_canvas.create_image(122, 122, image=self._emotion_images[key])
+        if key != "speaking":
+            self.soundwave_canvas.place_forget()
 
     def push_waveform(self, data: np.ndarray) -> None:
         if data.size == 0:
@@ -249,6 +292,17 @@ class ANEAGui:
     def show_status(self, text: str) -> None:
         self.status_label.configure(text=text)
 
+    def set_recording(self, active: bool) -> None:
+        """Actualiza el control principal para iniciar o terminar una toma."""
+        if active:
+            self.manual_btn.configure(
+                text="■  TERMINAR", fg_color="#b7474c", hover_color="#d15b61"
+            )
+        else:
+            self.manual_btn.configure(
+                text="▶  INICIAR", fg_color="#5b5b5b", hover_color="#707070"
+            )
+
     def show_heard(self, text: str) -> None:
         """Muestra brevemente lo que se entendió del usuario."""
         if not text:
@@ -267,6 +321,77 @@ class ANEAGui:
     def _on_manual_click(self) -> None:
         if self._on_manual_activate is not None:
             self._on_manual_activate()
+
+    def _start_tray_icon(self) -> None:
+        """Crea el icono de bandeja sin bloquear el hilo de Tk."""
+        try:
+            import pystray
+        except ImportError:
+            log.warning("pystray no está instalado; el panel seguirá disponible sin bandeja")
+            return
+
+        icon_image = Image.new("RGB", (64, 64), (37, 37, 37))
+        pixels = icon_image.load()
+        for x in range(64):
+            for y in range(64):
+                distance = ((x - 32) ** 2 + (y - 32) ** 2) ** 0.5
+                if 20 <= distance <= 27:
+                    pixels[x, y] = (145, 198, 75)
+                elif distance < 20:
+                    pixels[x, y] = (48, 61, 117)
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Mostrar ANEA", lambda: self.root.after(0, self.show_panel)),
+            pystray.MenuItem("Salir", lambda: self.root.after(0, self.quit)),
+        )
+        self._tray_icon = pystray.Icon("anea", icon_image, "ANEA", menu)
+        threading.Thread(
+            target=self._tray_icon.run, daemon=True, name="anea-tray"
+        ).start()
+
+    def _position_panel(self, y: int) -> None:
+        width = self.root.winfo_width() or config.GUI_WIDTH
+        height = self.root.winfo_height() or config.GUI_HEIGHT
+        x = self.root.winfo_screenwidth() - width - 24
+        taskbar_gap = 48
+        target_y = self.root.winfo_screenheight() - height - taskbar_gap
+        self.root.geometry(f"{width}x{height}+{x}+{y if y >= 0 else target_y}")
+
+    def show_panel(self) -> None:
+        """Muestra el popover con una animación ascendente desde la bandeja."""
+        if self._shutdown.is_set():
+            return
+        if self._panel_animation_id is not None:
+            self.root.after_cancel(self._panel_animation_id)
+        self.root.update_idletasks()
+        width = self.root.winfo_width() or config.GUI_WIDTH
+        height = self.root.winfo_height() or config.GUI_HEIGHT
+        x = self.root.winfo_screenwidth() - width - 24
+        target_y = self.root.winfo_screenheight() - height - 48
+        start_y = self.root.winfo_screenheight() + 8
+        self.root.geometry(f"{width}x{height}+{x}+{start_y}")
+        self.root.deiconify()
+        self.root.lift()
+        self._panel_visible = True
+
+        def animate(current_y: int) -> None:
+            if self._shutdown.is_set():
+                return
+            next_y = max(target_y, current_y - 42)
+            self.root.geometry(f"{width}x{height}+{x}+{next_y}")
+            if next_y > target_y:
+                self._panel_animation_id = self.root.after(12, lambda: animate(next_y))
+            else:
+                self._panel_animation_id = None
+
+        animate(start_y)
+
+    def _hide_panel(self) -> None:
+        if self._panel_animation_id is not None:
+            self.root.after_cancel(self._panel_animation_id)
+            self._panel_animation_id = None
+        self.root.withdraw()
+        self._panel_visible = False
 
     def _refresh_devices(self) -> None:
         devices = list_input_devices()
@@ -291,13 +416,25 @@ class ANEAGui:
                 log.warning("Selección de micrófono inválida: %s", choice)
 
     def _on_close(self) -> None:
+        self._hide_panel()
+
+    def quit(self) -> None:
+        """Cierra el proceso desde el menú de la bandeja."""
         self._shutdown.set()
-        for after_id in (self._heard_clear_after, self._speaking_timer, self._error_after_id, self._waveform_after_id):
+        for after_id in (
+            self._heard_clear_after, self._speaking_timer, self._error_after_id,
+            self._waveform_after_id, self._panel_animation_id,
+        ):
             if after_id is not None:
                 try:
                     self.root.after_cancel(after_id)
                 except Exception:
                     pass
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
         self.root.destroy()
 
     def _poll_queue(self) -> None:
@@ -318,25 +455,57 @@ class ANEAGui:
         """Encola una acción para ejecutarse en el hilo principal."""
         self._command_queue.put(fn)
 
-    def start_speaking_animation(self, duration_s: float) -> None:
+    def start_speaking_animation(
+        self, duration_s: float, audio: np.ndarray | None = None
+    ) -> None:
         if self._speaking_timer is not None:
             self.root.after_cancel(self._speaking_timer)
             self._speaking_timer = None
-        toggle = {"on": False}
+        if audio is None or audio.size == 0:
+            self._speaking_levels = np.ones(1, dtype=np.float32) * 0.35
+        else:
+            samples_per_frame = max(1, int(audio.size / max(1, duration_s * 30)))
+            levels = []
+            for start in range(0, audio.size, samples_per_frame):
+                chunk = audio[start:start + samples_per_frame]
+                levels.append(float(np.sqrt(np.mean(np.square(chunk)))))
+            self._speaking_levels = np.asarray(levels, dtype=np.float32)
+            peak = float(np.max(self._speaking_levels)) or 1.0
+            self._speaking_levels = np.clip(self._speaking_levels / peak, 0.12, 1.0)
+        self._speaking_frame = 0
+        self.soundwave_canvas.place(x=0, y=0)
 
         def tick() -> None:
             if self._shutdown.is_set():
                 return
-            toggle["on"] = not toggle["on"]
-            self._set_emotion("speaking" if toggle["on"] else "neutral")
-            self._speaking_timer = self.root.after(config.SPEAKING_ALTERNATE_MS, tick)
+            level = float(self._speaking_levels[self._speaking_frame % len(self._speaking_levels)])
+            self._draw_soundwave(level)
+            self._speaking_frame += 1
+            self._speaking_timer = self.root.after(33, tick)
 
         tick()
+
+    def _draw_soundwave(self, level: float) -> None:
+        self.soundwave_canvas.delete("all")
+        center = 146
+        radius = 128 + level * 3
+        width = 5 + int(level * 9)
+        self.soundwave_canvas.create_oval(
+            center - radius, center - radius, center + radius, center + radius,
+            outline="#91c64b", width=width,
+        )
+        self.soundwave_canvas.create_oval(
+            center - radius - 5, center - radius - 5,
+            center + radius + 5, center + radius + 5,
+            outline="#567c35", width=2,
+        )
 
     def stop_speaking_animation(self) -> None:
         if self._speaking_timer is not None:
             self.root.after_cancel(self._speaking_timer)
             self._speaking_timer = None
+        self.soundwave_canvas.delete("all")
+        self.soundwave_canvas.place_forget()
         self._set_emotion("neutral")
 
     def show_error(self, message: str, recover_ms: int = config.ERROR_RECOVERY_MS) -> None:

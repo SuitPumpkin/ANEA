@@ -52,14 +52,19 @@ LLM_N_CTX = 2048
 LLM_N_THREADS = max(1, (os.cpu_count() or 4) // 2)
 LLM_N_GPU_LAYERS = -1
 LLM_TEMPERATURE = 0.2
-LLM_MAX_TOKENS = 120
+LLM_MAX_TOKENS = 64
 LLM_REPEAT_PENALTY = 1.15
 LLM_TOP_P = 0.9
 LLM_TOP_K = 40
 
-WHISPER_MODEL_SIZE = "medium"
+# small reduce latencia manteniendo buena precisión en español; usa medium si
+# la prioridad es máxima precisión y la GPU tiene margen suficiente.
+WHISPER_MODEL_SIZE = "small"
 WHISPER_DEVICE = "auto"
 WHISPER_COMPUTE_TYPE = "auto"
+WHISPER_BEAM_SIZE = 1
+WHISPER_BEST_OF = 1
+WHISPER_VAD_FILTER = False
 # Prompt inicial para Whisper: le da contexto sobre qué vocabulario esperar
 # (nombres propios como "Anea", palabras en español, etc.) y mejora
 #大幅 la precisión de transcripción.
@@ -84,6 +89,8 @@ SILERO_MIKU_SPEAKER = "es_2"
 DEFAULT_VOICE = "anea"
 TTS_LANGUAGE = "es"
 TTS_SAMPLE_RATE = 24000
+TTS_CHUNK_MAX_CHARS = 120
+TTS_CHUNK_PAUSE_SECONDS = 0.06
 
 SAMPLE_RATE_INPUT = 16000
 SAMPLE_RATE_OUTPUT = 24000

@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 import numpy as np
 import sounddevice as sd
@@ -144,6 +144,27 @@ def play_audio(data: np.ndarray, sample_rate: int = config.SAMPLE_RATE_OUTPUT) -
     if data.ndim == 1:
         data = data.reshape(-1, 1)
     sd.play(data, samplerate=sample_rate, blocking=True)
+
+
+def play_audio_stream(
+    chunks: Iterable[np.ndarray],
+    sample_rate: int = config.SAMPLE_RATE_OUTPUT,
+    on_first_chunk: Callable[[np.ndarray], None] | None = None,
+) -> None:
+    """Reproduce chunks sin cerrar el dispositivo entre fragmentos."""
+    first = True
+    with sd.OutputStream(
+        samplerate=sample_rate, channels=1, dtype=config.DTYPE, blocksize=0
+    ) as stream:
+        for chunk in chunks:
+            data = np.asarray(chunk, dtype=np.float32).reshape(-1, 1)
+            if data.size == 0:
+                continue
+            if first:
+                first = False
+                if on_first_chunk is not None:
+                    on_first_chunk(data[:, 0])
+            stream.write(data)
 
 
 def normalize_audio(data: np.ndarray, peak: float = 0.95) -> np.ndarray:

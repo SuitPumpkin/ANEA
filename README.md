@@ -119,6 +119,43 @@ Edita `anea/config.py` para ajustar:
 - Idioma TTS (`TTS_LANGUAGE`)
 - Tiempo de edición de transcripción (`EDIT_TIMEOUT_SECONDS`)
 
+## Rendimiento y voces
+
+- Whisper usa `small`, GPU cuando está disponible, decodificación greedy y recibe el audio
+  directamente desde memoria para reducir la latencia de transcripción. Si necesitas más
+  precisión, cambia `WHISPER_MODEL_SIZE` a `medium` en `anea/config.py`.
+- Las respuestas TTS se dividen automáticamente en fragmentos cortos. Esto evita que XTTS
+  se degrade o produzca sonidos ásperos en textos largos, manteniendo la misma voz entre
+  fragmentos.
+- Cada voz personalizada conserva su propio embedding cacheado en `temp/speaker_embeddings/`.
+  Esto evita recalcular la identidad de la voz en cada respuesta, aunque la primera carga de
+  cada voz puede tardar.
+- La reproducción actual ya es incremental: ANEA mantiene abierto el dispositivo de salida y
+  reproduce cada fragmento de XTTS en cuanto está listo. El primer fragmento sigue esperando
+  a que XTTS lo genere, pero ya no se espera a sintetizar toda la respuesta.
+
+### Alternativas investigadas para streaming nativo
+
+- **Fish Speech S2** expone resultados `header`, `segment` y `final`, además de clonación con
+  muestras de 10 a 30 segundos. Es el candidato más directo para streaming nativo, pero requiere
+  un entorno separado y su instalación documentada usa Python 3.12; Windows tiene limitaciones
+  con `torch.compile`.
+- **F5-TTS** incluye inferencia por chunks y un servidor socket que envía audio mientras genera.
+  Es prometedor para reducir el tiempo hasta el primer audio, pero añade otra pila de modelos,
+  dependencias y mantenimiento para Windows.
+- **Chatterbox Multilingual** permite clonación por audio de referencia y soporta español, pero
+  su API pública principal devuelve un WAV completo; no lo adoptamos como solución de streaming.
+
+## Errores conocidos
+
+- La primera respuesta después de iniciar puede tardar porque se cargan Whisper, el modelo
+  GGUF y el motor TTS en memoria. Las siguientes respuestas son más rápidas gracias al warmup.
+- Las voces creadas desde un WAV usan XTTS con conditioning por muestra; todavía no son
+  modelos TTS entrenados individualmente por voz. El segmentado reduce los gruñidos y cortes,
+  pero no elimina por completo artefactos en hardware con poca VRAM o textos anómalos.
+- Ejecutar tareas arbitrarias en la PC sigue deshabilitado por seguridad. Primero debe existir
+  un sistema de permisos explícitos, confirmación del usuario y lista de acciones permitidas.
+
 ## Notas
 
 - El primer arranque descargará el modelo de faster-whisper (~460MB para `small`).

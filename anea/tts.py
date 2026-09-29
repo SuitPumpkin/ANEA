@@ -8,6 +8,7 @@ Silero TTS (rapida, sin clonación).
 from __future__ import annotations
 
 import logging
+import re
 import tempfile
 import threading
 from pathlib import Path
@@ -20,6 +21,28 @@ from . import config
 log = logging.getLogger(__name__)
 
 _tts_init_lock = threading.Lock()
+
+
+def _split_for_tts(text: str, max_chars: int) -> list[str]:
+    """Divide respuestas largas en unidades estables para el sintetizador."""
+    normalized = re.sub(r"\s+", " ", (text or "").strip())
+    if not normalized:
+        return []
+    sentences = re.split(r"(?<=[.!?¿¡])\s+", normalized)
+    chunks: list[str] = []
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        while len(sentence) > max_chars:
+            split_at = sentence.rfind(" ", 0, max_chars)
+            if split_at < max_chars // 2:
+                split_at = max_chars
+            chunks.append(sentence[:split_at].strip())
+            sentence = sentence[split_at:].strip()
+        if sentence:
+            chunks.append(sentence)
+    return chunks
 
 
 def _patch_torch_load() -> None:
@@ -282,9 +305,26 @@ class TTSEngine:
             log.warning("Warmup '%s' falló: %s", v_name, exc)
 
     def synthesize(self, text: str) -> np.ndarray:
+        rendered = list(self.synthesize_chunks(text))
+        if not rendered:
+            return np.zeros(1, dtype=np.float32)
+        return np.concatenate(rendered)
+
+    def synthesize_chunks(self, text: str):
+        """Genera fragmentos reproducibles para empezar a hablar cuanto antes."""
+        chunks = _split_for_tts(text, config.TTS_CHUNK_MAX_CHARS)
+        if not chunks:
+            return
         v = self._voices[self._voice]
         v.initialize()  # type: ignore[attr-defined]
-        return v.synthesize(text)  # type: ignore[attr-defined]
+        pause = np.zeros(
+            int(config.TTS_SAMPLE_RATE * config.TTS_CHUNK_PAUSE_SECONDS),
+            dtype=np.float32,
+        )
+        for index, chunk in enumerate(chunks):
+            yield v.synthesize(chunk)  # type: ignore[attr-defined]
+            if index < len(chunks) - 1:
+                yield pause
 
     def current_persona(self, voice: str | None = None) -> str:
         name = voice or self._voice

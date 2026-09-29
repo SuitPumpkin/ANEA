@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from . import config
-from .audio import AudioCapture, play_audio, wait_for_speech_then_silence
+from .audio import AudioCapture, play_audio_stream
 from .gui import ANEAGui, resolve_device
 from .llm import LLMEngine
 from .stt import STTEngine, TranscriptionResult
@@ -83,7 +83,10 @@ class ANEA:
             self.gui.push_waveform(_chunk)
 
     def _on_manual_activate(self) -> None:
-        self.gui.submit(lambda: self._activate_listening())
+        if self.state == AssistantState.LISTENING:
+            self.gui.submit(self._finish_listening)
+        else:
+            self.gui.submit(self._activate_listening)
 
     def _on_wake_detected(self, _name: str) -> None:
         self.gui.submit(lambda: self._activate_listening())
@@ -117,37 +120,40 @@ class ANEA:
         try:
             self._set_state(AssistantState.LISTENING)
             self.gui._set_emotion("listening")
-            self.gui.show_status("Escuchando...")
+            self.gui.show_status("Escuchando... pulsa TERMINAR cuando acabes")
+            self.gui.set_recording(True)
             self.gui._clear_heard()
             self.capture.start()
             self.capture.begin_recording()
-            threading.Thread(target=self._capture_loop, daemon=True, name="capture").start()
         except Exception:
             self._busy.release()
             raise
 
-    def _capture_loop(self) -> None:
-        try:
-            audio = wait_for_speech_then_silence(self.capture, max_total=config.MAX_RECORD_SECONDS)
-        except Exception as exc:
-            log.exception("Error en captura")
-            self.gui.submit(lambda e=exc: self._fail(f"Error de captura: {e}"))
-            try:
-                self.capture.stop()
-            except Exception:
-                pass
-            try:
-                self._busy.release()
-            except Exception:
-                pass
+    def _finish_listening(self) -> None:
+        if self.state != AssistantState.LISTENING:
             return
-        self.capture.stop()
-        self.gui.submit(lambda a=audio: self._handle_captured_audio(a))
+        try:
+            audio = self.capture.end_recording()
+            self.capture.stop()
+            self.gui.set_recording(False)
+            self.gui.show_status("Transcribiendo...")
+            self.gui._set_emotion("thinking")
+            self._set_state(AssistantState.TRANSCRIBING)
+            threading.Thread(
+                target=self._transcribe,
+                args=(audio,),
+                daemon=True,
+                name="transcribe",
+            ).start()
+        except Exception as exc:
+            log.exception("Error al terminar captura")
+            self._fail(f"Error de captura: {exc}")
 
     def _handle_captured_audio(self, audio) -> None:
         self._set_state(AssistantState.TRANSCRIBING)
         self.gui._set_emotion("thinking")
         self.gui.show_status("Transcribiendo...")
+        self.gui.set_recording(False)
         threading.Thread(
             target=self._transcribe,
             args=(audio,),
@@ -260,19 +266,31 @@ class ANEA:
 
     def _synthesize_and_play(self, text: str) -> None:
         log.info("TTS synthesizing (%d chars): %r", len(text), text)
+        first_chunk = True
+
+        def on_first_chunk(chunk: np.ndarray) -> None:
+            nonlocal first_chunk
+            if not first_chunk:
+                return
+            first_chunk = False
+            log.info("TTS first chunk ready: %d samples", chunk.size)
+            self.gui.submit(
+                lambda c=chunk: self.gui.start_speaking_animation(
+                    duration_s=c.size / config.TTS_SAMPLE_RATE, audio=c
+                )
+            )
+
         try:
-            wav = self.tts.synthesize(text)
+            chunks = self.tts.synthesize_chunks(text)
+            play_audio_stream(
+                chunks,
+                sample_rate=config.TTS_SAMPLE_RATE,
+                on_first_chunk=on_first_chunk,
+            )
         except Exception as exc:
-            log.exception("Error TTS")
-            raise RuntimeError(f"TTS falló: {exc}") from exc
-        log.info("TTS wav size: %d samples (%.2fs)", wav.size, wav.size / config.TTS_SAMPLE_RATE)
-        duration = wav.size / config.TTS_SAMPLE_RATE
-        self.gui.start_speaking_animation(duration_s=duration)
-        try:
-            play_audio(wav, sample_rate=config.TTS_SAMPLE_RATE)
-        except Exception as exc:
-            log.exception("Error reproduciendo audio")
-            raise RuntimeError(f"Reproducción falló: {exc}") from exc
+            log.exception("Error TTS/reproducción")
+            raise RuntimeError(f"TTS o reproducción falló: {exc}") from exc
+        log.info("TTS stream complete")
         log.info("TTS play complete")
 
     def _reset_after_turn(self, status: str = 'Esperando "Oye Anea"...') -> None:
