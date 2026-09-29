@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.log
+
+# Entornos virtuales. OJO: son dos, y solo se ignoraba .venv/
+.venv/
+.venv*/
+venv/
+env/
+
+# Modelos de lenguaje: pesan GB y se descargan, no se versionan
+Models/
+models/
+*.gguf
+*.safetensors
+*.bin
+
+# Datos biometricos. NUNCA se versionan. Ver NOTICE.md
+# Las muestras de voz son datos biometricos de personas: sin consentimiento
+# escrito de la voz, no se publican. NUNCA subas un .wav a este repo.
+Voice Samples/*.wav
+Voice Samples/**/*.wav
+*.wav
+# Los embeddings de hablante son derive de la voz: mismo tratamiento
+*.pt
+*.pth
+*.npy
+temp/
+
+# Configuracion local: puede contener rutas absolutas del equipo del autor
+anea_config.json
+
+# Editores y sistema
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
