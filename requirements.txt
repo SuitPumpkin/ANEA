@@ -1,11 +1,12 @@
 customtkinter>=5.2.0
 llama-cpp-python>=0.2.90
 faster-whisper>=1.0.0
-TTS>=0.22.0
+kokoro>=0.9.4
 openwakeword>=0.6.0
+silero-tts>=0.0.5
 sounddevice>=0.4.6
 soundfile>=0.12.1
-numpy>=1.26
+numpy>=1.26,<2.0
 pillow>=10.0
 pystray>=0.19.5
 torch>=2.0

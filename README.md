@@ -1,7 +1,10 @@
-# ANEA — Mini Asistente Personal con VRAM
+# ANEA — Asistente de voz local
 
-Asistente personal por voz para Windows con wake word "Oye Anea", STT local
-(Spanish), LLM local (Qwen 1.5B Q4_K_M) y TTS con voz clonada (Coqui XTTS v2).
+Asistente personal por voz para Windows con wake word "Hola Anea", STT local
+(faster-whisper), LLM local (GGUF) y TTS con voces **sintéticas pre-entrenadas**
+(Kokoro-82M). Todo se ejecuta en tu equipo: no hay servicios remotos.
+
+**No hay clonación de voz.** Ver [`NOTICE.md`](NOTICE.md).
 
 ## Arquitectura de Estados
 
@@ -21,47 +24,47 @@ ANEA/
 │   ├── wakeword.py     # openWakeWord
 │   ├── stt.py          # faster-whisper
 │   ├── llm.py          # llama-cpp-python (GGUF)
-│   ├── tts.py          # Coqui XTTS v2 + Silero + speaker embedding cache
+│   ├── fasttts.py      # Kokoro-82M (backend principal)
+│   ├── tts.py          # TTSEngine: Kokoro + fallback Silero + personas
 │   ├── gui.py          # CustomTkinter
 │   └── main.py         # Orquestador
 ├── Emotions/           # PNGs: Neutral/Listening/Thinking/Speaking/Embarasement
-├── Models/             # qwen*.gguf, mistral*.gguf, etc.
-├── Voice Samples/      # un .wav por voz clonada. Ver NOTICE.md: NO se versionan
-├── temp/               # speaker_embeddings/{voz}.pt (auto-creado, no se versiona)
+├── Models/             # qwen*.gguf, mistral*.gguf, gemma*.gguf
+├── Voice Samples/      # material local, ignorado por git. YA NO se usa en ejecución
+├── temp/               # artefactos de prueba (ignorado por git)
 ├── anea_config.json    # Preferencias de usuario (modelo y voz por defecto)
-├── NOTICE.md           # Consentimiento para clonar voces. Leer antes de clonar ninguna
+├── NOTICE.md           # Datos de voz. Leer antes de publicar nada
 ├── requirements.txt
 ├── anea.bat            # Launcher (usa .venv311)
-└── scripts/install.bat # Crea venv Python 3.11 + instala TTS
+└── scripts/install.bat # Crea el venv Python 3.11 e instala todo
 ```
 
-> **Este repositorio no incluye ninguna muestra de voz.** Las muestras son datos biometricos y
-> subirlas sin consentimiento escrito de la persona es ilegal en varias jurisdicciones. ANEA
-> funciona sin ellas usando `miku` (la voz rapida de Silero, sin clonacion). Ver
-> [`NOTICE.md`](NOTICE.md) y [`Voice Samples/README.md`](Voice%20Samples/README.md).
+## Voces
+
+Dos voces sintéticas, definidas en `TTS_VOICES` (`anea/config.py`):
+
+| id | Label en la GUI | Voz Kokoro | Backend |
+|---|---|---|---|
+| `dora` | Dora | `ef_dora` | Kokoro-82M (GPU si está disponible) |
+| `maria` | María | `em_santa` | Kokoro-82M (GPU si está disponible) |
+
+Si Kokoro no se puede cargar, cada voz cae automáticamente a **Silero v3** y el
+cambio queda registrado en el log. No hace falta instalar nada más.
+
+`Voice Samples/` ya **no se lee** en tiempo de ejecución. Los `.wav` siguen en
+disco y en `.gitignore` por si los necesitas, pero ANEA no los usa.
 
 ## Instalación
 
-### 1) Python 3.13 — dependencias principales
+Todo va en un único venv de Python 3.11 (Kokoro no soporta 3.13):
 
-```powershell
-pip install -r requirements.txt
-```
-
-### 2) Python 3.11 — TTS (Coqui requiere Python <3.12)
-
-```powershell
+```cmd
 scripts\install.bat
 ```
 
-Esto descarga e instala Python 3.11.9 en `C:\Python311` (si no existe) y
-crea un venv `.venv311` con `TTS`.
-
-### 3) Recursos
-
-- `Emotions/`: PNGs ya presentes (nota: `Embarasement` con una sola 'r').
-- `Model/qwen2.5-1.5b-instruct-q4_k_m.gguf`: ya presente.
-- `Voice Sample/*.wav`: ya presente; el nombre se detecta automáticamente.
+Eso crea `.venv311` e instala GUI, audio, whisper, openWakeWord, llama-cpp-python,
+Kokoro y Silero. El primer arranque descarga los pesos de Kokoro-82M (~330 MB,
+se cachean en `~/.cache/huggingface`).
 
 ## Ejecución
 
@@ -69,104 +72,79 @@ crea un venv `.venv311` con `TTS`.
 anea.bat
 ```
 
-El wake word está deshabilitado por defecto (usa el botón "Activar manualmente").
+El wake word está deshabilitado por defecto (`WAKEWORD_ENABLED = False` en
+`anea/config.py`); usa el botón "Activar manualmente" hasta tener un modelo
+entrenado para "Hola Anea".
 
 ## Preferencias de usuario (`anea_config.json`)
 
-Para elegir qué modelo y qué voz se usan por defecto, edita
-`anea_config.json` o usa los flags de línea de comandos:
-
 ```cmd
-REM Ver los modelos y voces disponibles
+REM Ver modelos y voces disponibles
 anea.bat --list-models
 anea.bat --list-voices
 
-REM Cambiar el modelo y la voz por defecto (los guarda en anea_config.json)
-anea.bat --set-model mistral-7b-instruct-v0.2.Q4_K_M.gguf
-anea.bat --set-voice alex
+REM Cambiar el modelo y la voz por defecto
+anea.bat --set-model qwen2.5-1.5b-instruct-q4_k_m.gguf
+anea.bat --set-voice maria
 ```
-
-Ejemplo de `anea_config.json`:
 
 ```json
 {
   "model": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-  "default_voice": "anea"
+  "default_voice": "dora"
 }
 ```
 
-- `model`: nombre exacto del archivo `.gguf` en `Models/`.
-- `default_voice`: nombre de la voz (minúsculas) — puede ser el nombre de
-  un `.wav` en `Voice Samples/` (sin extensión) o `miku` para la voz rápida
-  de Silero. Para usar una voz Miku real, añade una muestra de voz **con
-  consentimiento escrito de esa persona** como `Voice Samples/Miku.wav`; ANEA
-  la cargará con XTTS. Sin esa muestra, `miku` usa el fallback genérico `es_2`
-  de Silero.
+- `model`: nombre exacto del `.gguf` en `Models/`.
+- `default_voice`: id de voz en minúsculas (`dora` o `maria`).
 
-> `default_voice: "miku"` funciona **sin ninguna muestra de voz** y sin clonar a
-> nadie. Es la opción por defecto recomendada para probar el proyecto.
+> **Modelo recomendado: `qwen2.5-1.5b-instruct-q4_k_m.gguf`.** Es el único de los
+> tres modelos incluidos que sigue la persona (responde en español, se identifica
+> como Anea y no usa markdown). Gemma-3-1B se pasa al inglés y se identifica como
+> Gemma; Mistral-7B responde en español pero añade traducciones al inglés y tarda
+> bastante más.
 
-Si el modelo o la voz del JSON no existen, ANEA usa el default de
-`config.py`.
+Si el modelo o la voz del JSON no existen, ANEA usa el default de `config.py`.
 
 ## Configuración
 
-Edita `anea/config.py` para ajustar:
+Edita `anea/config.py`:
 
 - Modelo Whisper (`WHISPER_MODEL_SIZE`): `tiny`/`base`/`small`/`medium`/`large-v3`
 - Idioma STT (`WHISPER_LANGUAGE`)
-- Modelo GGUF (`GGUF_MODEL_PATH`), GPU layers (`LLM_N_GPU_LAYERS`)
-- Idioma TTS (`TTS_LANGUAGE`)
-- Tiempo de edición de transcripción (`EDIT_TIMEOUT_SECONDS`)
+- Wake word (`WAKEWORD_ENABLED`, `WAKEWORD_MODEL_NAME`, `WAKEWORD_THRESHOLD`)
+- Voces (`TTS_VOICES`, `DEFAULT_VOICE_ID`)
+- Kokoro (`KOKORO_USE_GPU`, `KOKORO_SPEED`)
+- Longitud de respuesta (`LLM_MAX_TOKENS`, `TTS_CHUNK_MAX_CHARS`)
 
-## Rendimiento y voces
+## Rendimiento
 
-- Whisper usa `small`, GPU cuando está disponible, decodificación greedy y recibe el audio
-  directamente desde memoria para reducir la latencia de transcripción. Si necesitas más
-  precisión, cambia `WHISPER_MODEL_SIZE` a `medium` en `anea/config.py`.
-- Las respuestas TTS se dividen automáticamente en fragmentos cortos. Esto evita que XTTS
-  se degrade o produzca sonidos ásperos en textos largos, manteniendo la misma voz entre
-  fragmentos.
-- Cada voz personalizada conserva su propio embedding cacheado en `temp/speaker_embeddings/`.
-  Esto evita recalcular la identidad de la voz en cada respuesta, aunque la primera carga de
-  cada voz puede tardar.
-- La reproducción actual ya es incremental: ANEA mantiene abierto el dispositivo de salida y
-  reproduce cada fragmento de XTTS en cuanto está listo. El primer fragmento sigue esperando
-  a que XTTS lo genere, pero ya no se espera a sintetizar toda la respuesta.
-
-### Alternativas investigadas para streaming nativo
-
-- **Fish Speech S2** expone resultados `header`, `segment` y `final`, además de clonación con
-  muestras de 10 a 30 segundos. Es el candidato más directo para streaming nativo, pero requiere
-  un entorno separado y su instalación documentada usa Python 3.12; Windows tiene limitaciones
-  con `torch.compile`.
-- **F5-TTS** incluye inferencia por chunks y un servidor socket que envía audio mientras genera.
-  Es prometedor para reducir el tiempo hasta el primer audio, pero añade otra pila de modelos,
-  dependencias y mantenimiento para Windows.
-- **Chatterbox Multilingual** permite clonación por audio de referencia y soporta español, pero
-  su API pública principal devuelve un WAV completo; no lo adoptamos como solución de streaming.
+- Whisper usa `small`, GPU cuando está disponible, decodificación greedy y audio
+  directo desde memoria. Para más precisión, `WHISPER_MODEL_SIZE = "medium"`.
+- Kokoro-82M corre en GPU si `torch.cuda.is_available()`. Medido en una GTX 1660
+  SUPER: 12 s de audio en 0.65 s de síntesis (rtf ≈ 0.05).
+- La reproducción es incremental: ANEA mantiene abierto el dispositivo de salida
+  y reproduce cada fragmento en cuanto está listo, sin esperar a sintetizar toda
+  la respuesta.
+- Las respuestas se pueden dividir en fragmentos de hasta
+  `TTS_CHUNK_MAX_CHARS` (400) caracteres, con una pausa de 60 ms entre ellos.
+- La primera respuesta tras arrancar es la más lenta: se cargan Whisper, el GGUF
+  y Kokoro en memoria.
 
 ## Errores conocidos
 
-- La primera respuesta después de iniciar puede tardar porque se cargan Whisper, el modelo
-  GGUF y el motor TTS en memoria. Las siguientes respuestas son más rápidas gracias al warmup.
-- Las voces creadas desde un WAV usan XTTS con conditioning por muestra; todavía no son
-  modelos TTS entrenados individualmente por voz. El segmentado reduce los gruñidos y cortes,
-  pero no elimina por completo artefactos en hardware con poca VRAM o textos anómalos.
-- Ejecutar tareas arbitrarias en la PC sigue deshabilitado por seguridad. Primero debe existir
-  un sistema de permisos explícitos, confirmación del usuario y lista de acciones permitidas.
-
-## Notas
-
-- El primer arranque descargará el modelo de faster-whisper (~460MB para `small`).
-- XTTS v2 descarga ~1.8GB la primera vez.
-- Speaker embedding se cachea en `temp/speaker_embedding.pt`.
-- Si XTTS carga sin GPU, la síntesis será muy lenta. Ajusta `gpu` en
-  `TTSEngine.initialize()` según tu hardware.
+- El wake word activo sigue siendo `hey_jarvis` y está deshabilitado. Falta
+  entrenar el modelo de "Hola Anea" con openWakeWord.
+- Los modelos de 1B (Qwen 1.5B, Gemma 3 1B) no son fiables obedecendo
+  instrucciones estrictas. Se nota sobre todo en la Fase 4 (tareas en PC):
+  un LLM de 1B puede inventar llamadas a herramientas o elegir mal una.
+- Ejecutar tareas en la PC sigue deshabilitado. Falta el sistema de permisos
+  (`Fase 4` del plan).
 
 ## Licencia y ética
 
 - Código bajo licencia **MIT** (ver `LICENSE`).
-- Los pesos de los modelos (`.gguf`) **no** se distribuyen aquí: tienen licencias propias.
-- **La clonación de voz requiere consentimiento escrito de la persona cuya voz se clona.**
-  La voz es un dato biométrico. Lee [`NOTICE.md`](NOTICE.md) antes de usar esta capacidad.
+- Los pesos de los modelos **no** se distribuyen aquí: tienen licencias propias.
+  Kokoro-82M es Apache-2.0; los `.gguf` de Qwen/Mistral/Gemma tienen las suyas.
+- **ANEA no clona voces.** Usa únicamente voces sintéticas pre-entrenadas. Lee
+  [`NOTICE.md`](NOTICE.md) antes de publicar nada.

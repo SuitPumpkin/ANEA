@@ -51,7 +51,9 @@ class ANEA:
         self.tts = TTSEngine(voice=default_voice)
         if self.tts.available_voices:
             self.llm.system_prompt = persona_for_voice(self.tts.voice)
-            self.gui.set_voice_options(self.tts.available_voices, self.tts.voice)
+            self.gui.set_voice_options(
+                self.tts.available_voices, self.tts.voice, self.tts.voice_labels
+            )
         self.state = AssistantState.IDLE
         self._state_lock = threading.Lock()
         self._busy = threading.Lock()
@@ -293,7 +295,7 @@ class ANEA:
         log.info("TTS stream complete")
         log.info("TTS play complete")
 
-    def _reset_after_turn(self, status: str = 'Esperando "Oye Anea"...') -> None:
+    def _reset_after_turn(self, status: str = 'Esperando "Hola Anea"...') -> None:
         self._set_state(AssistantState.IDLE)
         self.gui.submit(lambda s=status: (
             self.gui._set_emotion("neutral"),
@@ -332,10 +334,7 @@ class ANEA:
             except Exception as exc:
                 log.warning("LLM preload falló: %s", exc)
             for voice in self.tts.available_voices:
-                if voice == "miku":
-                    label = "Miku (XTTS)" if "miku" in self.tts._xtts_voices else "Miku (Silero fallback)"
-                else:
-                    label = f"Voz '{voice}' (XTTS)"
+                label = f"Voz '{self.tts.voice_labels.get(voice, voice)}' (Kokoro)"
                 self._report_init_step(label, True)
                 try:
                     self.tts.warmup(voice=voice)

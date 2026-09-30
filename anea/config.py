@@ -41,8 +41,8 @@ GGUF_MODEL_PATH = MODELS_DIR / "qwen2.5-1.5b-instruct-q4_k_m.gguf"
 LLM_SYSTEM_PROMPT = (
     "Responde EXCLUSIVAMENTE en español. Nunca uses inglés ni otro idioma. "
     "Nunca agregues traducciones entre paréntesis. Tu salida debe ser texto puro en español.\n"
-    "Límite estricto: 1 sola frase corta (máximo 20 palabras). Sin listas, sin viñetas, sin markdown, "
-    "sin emojis, sin comillas.\n"
+    "Extensión: de 1 a 3 frases naturalmente conectadas, máximo 80 palabras.\n"
+    "Sin listas, sin viñetas, sin markdown, sin emojis, sin comillas.\n"
     "Si no sabes algo, di 'No estoy segura' o 'No lo sé' en español.\n"
     "No inventes datos. Si te preguntan algo personal, responde brevemente sin repetir tu nombre.\n"
     "Tu nombre es Anea."
@@ -52,7 +52,7 @@ LLM_N_CTX = 2048
 LLM_N_THREADS = max(1, (os.cpu_count() or 4) // 2)
 LLM_N_GPU_LAYERS = -1
 LLM_TEMPERATURE = 0.2
-LLM_MAX_TOKENS = 64
+LLM_MAX_TOKENS = 180
 LLM_REPEAT_PENALTY = 1.15
 LLM_TOP_P = 0.9
 LLM_TOP_K = 40
@@ -80,16 +80,32 @@ WAKEWORD_CHANNELS = 1
 WAKEWORD_SAMPLE_RATE = 16000
 WAKEWORD_ENABLED = False
 
-TTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
-SPEAKER_EMBEDDING_PATH = TEMP_DIR / "speaker_embedding.pt"
-SPEAKER_EMBEDDING_DIR = TEMP_DIR / "speaker_embeddings"
-SILERO_MIKU_SPEAKER = "es_2"
+TTS_BACKEND = "kokoro"
+
+# Kokoro-82M: 82M params, pesos Apache-2.0, 24 kHz. Voces pre-entrenadas, sin
+# clonación y sin datos biométricos del usuario.
+KOKORO_REPO_ID = "hexgrad/Kokoro-82M"
+KOKORO_LANG_CODE = "e"
+KOKORO_USE_GPU = True
+KOKORO_SPEED = 1.0
+
+# Voces disponibles. El id es la clave interna (minúscula, la que se guarda en
+# anea_config.json); el label es lo que se ve en la GUI.
+TTS_VOICES: dict[str, dict[str, str]] = {
+    "dora": {"kokoro": "ef_dora", "label": "Dora"},
+    "maria": {"kokoro": "em_santa", "label": "María"},
+}
+DEFAULT_VOICE_ID = "dora"
+
+# Silero queda como backend de respaldo si Kokoro no arranca.
+SILERO_LANGUAGE = "es"
+SILERO_SPEAKER = "es_2"
 
 # Voz por defecto (sobreescribible por anea_config.json).
-DEFAULT_VOICE = "anea"
+DEFAULT_VOICE = DEFAULT_VOICE_ID
 TTS_LANGUAGE = "es"
 TTS_SAMPLE_RATE = 24000
-TTS_CHUNK_MAX_CHARS = 120
+TTS_CHUNK_MAX_CHARS = 400
 TTS_CHUNK_PAUSE_SECONDS = 0.06
 
 SAMPLE_RATE_INPUT = 16000
@@ -116,16 +132,19 @@ GUI_COLOR_THEME = "blue"
 
 
 def ensure_dirs() -> None:
-    """Crea carpetas necesarias (temp/, etc.) si no existen."""
+    """Crea carpetas necesarias (temp/, etc.) si existen."""
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
-    SPEAKER_EMBEDDING_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def discover_voice_samples() -> list[Path]:
-    """Retorna todos los .wav en VOICE_SAMPLE_DIR ordenados alfabéticamente."""
-    if not VOICE_SAMPLE_DIR.exists():
-        return []
-    return sorted(VOICE_SAMPLE_DIR.glob("*.wav"))
+def voice_label(voice_id: str) -> str:
+    """Nombre visible de una voz a partir de su id interno."""
+    entry = TTS_VOICES.get(voice_id.lower())
+    return entry["label"] if entry else voice_id
+
+
+def voice_labels() -> dict[str, str]:
+    """Mapa id -> label para todas las voces disponibles."""
+    return {vid: entry["label"] for vid, entry in TTS_VOICES.items()}
 
 
 def discover_gguf_models() -> list[Path]:
@@ -168,5 +187,12 @@ def resolve_user_default_voice() -> str:
     user_cfg = load_user_config()
     voice = user_cfg.get("default_voice")
     if voice and isinstance(voice, str):
-        return voice.lower()
+        candidate = voice.lower()
+        if candidate in TTS_VOICES:
+            return candidate
+        log.warning(
+            "Voz '%s' de anea_config.json no existe; usando '%s'",
+            candidate,
+            DEFAULT_VOICE,
+        )
     return DEFAULT_VOICE

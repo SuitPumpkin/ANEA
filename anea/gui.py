@@ -196,9 +196,10 @@ class ANEAGui:
         )
         self.device_menu.pack(fill="x")
 
-        self.voice_var = tk.StringVar(value="anea")
+        self._voice_labels: dict[str, str] = {}
+        self.voice_var = tk.StringVar(value=config.DEFAULT_VOICE)
         self.voice_menu = ctk.CTkOptionMenu(
-            voice_column, variable=self.voice_var, values=["anea", "miku"],
+            voice_column, variable=self.voice_var, values=["Dora", "María"],
             command=self._on_voice_selected, width=138, height=32,
             corner_radius=8, fg_color="#454545", button_color="#454545",
             button_hover_color="#5b5b5b", text_color="#ece9e4",
@@ -518,7 +519,7 @@ class ANEAGui:
         def recover() -> None:
             self._error_after_id = None
             self._set_emotion("neutral")
-            self.show_status('Esperando "Oye Anea"...')
+            self.show_status('Esperando "Hola Anea"...')
 
         self._error_after_id = self.root.after(recover_ms, recover)
 
@@ -535,20 +536,36 @@ class ANEAGui:
         self._on_voice_changed = cb
 
     def set_voice(self, name: str) -> None:
-        if name in self.voice_menu.cget("values"):
-            self.voice_var.set(name)
+        if name in self._voice_ids():
+            self.voice_var.set(self._voice_label(name))
 
-    def set_voice_options(self, voices: list[str], current: str) -> None:
-        """Reemplaza la lista de voces disponibles (cloned + silero)."""
-        self.voice_menu.configure(values=voices)
+    def _voice_label(self, voice_id: str) -> str:
+        return self._voice_labels.get(voice_id, voice_id)
+
+    def _voice_ids(self) -> list[str]:
+        return list(self._voice_labels) or [v for v in self.voice_menu.cget("values")]
+
+    def set_voice_options(
+        self,
+        voices: list[str],
+        current: str,
+        labels: dict[str, str] | None = None,
+    ) -> None:
+        """Reemplaza la lista de voces. `labels` mapea id -> texto visible."""
+        self._voice_labels = dict(labels or {})
+        self.voice_menu.configure(values=[self._voice_label(v) for v in voices])
         if current in voices:
-            self.voice_var.set(current)
+            self.voice_var.set(self._voice_label(current))
         elif voices:
-            self.voice_var.set(voices[0])
+            self.voice_var.set(self._voice_label(voices[0]))
 
     def _on_voice_selected(self, choice: str) -> None:
-        if self._on_voice_changed is not None:
-            self._on_voice_changed(choice)
+        if self._on_voice_changed is None:
+            return
+        for voice_id in self._voice_ids():
+            if self._voice_label(voice_id) == choice:
+                self._on_voice_changed(voice_id)
+                return
 
     def set_loading(self, message: str, done_steps: list[str] | None = None) -> None:
         self._loading_label.configure(text=message)
@@ -561,7 +578,7 @@ class ANEAGui:
         self._loading_frame.destroy()
         self.manual_btn.configure(state="normal")
         self._ready = True
-        self.show_status('Esperando "Oye Anea"...')
+        self.show_status('Esperando "Hola Anea"...')
 
     def mainloop(self) -> None:
         self.root.mainloop()
